@@ -12,6 +12,7 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { pool } from './db.js';
 import { auth, createAccessToken, createRefreshToken, hashRefreshToken } from './security.js';
+import { GarmentRecognitionError, recognizeGarment } from './openrouter.js';
 
 const app = express();
 const DUMMY_PASSWORD_HASH = bcrypt.hashSync(randomBytes(32).toString('hex'), 12);
@@ -35,6 +36,7 @@ app.use(express.json({ limit: '48kb', type: 'application/json' }));
 app.use('/v1/auth', rateLimit({ windowMs: 15 * 60_000, limit: 30, standardHeaders: 'draft-8', legacyHeaders: false }));
 app.use('/v1/outfit-recommendations', rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: 'draft-8', legacyHeaders: false }));
 const uploadLimiter = rateLimit({ windowMs: 60 * 60_000, limit: 40, standardHeaders: 'draft-8', legacyHeaders: false });
+const recognitionLimiter = rateLimit({ windowMs: 60 * 60_000, limit: 20, standardHeaders: 'draft-8', legacyHeaders: false });
 
 app.get('/health', async (_request, response) => {
   try {
@@ -270,6 +272,16 @@ app.get('/v1/garments/:id/image', auth, asyncRoute(async (request, response) => 
   return response.sendFile(path.join(uploadRoot, image.object_key), (error) => { if (error && !response.headersSent) fail(response, 404, 'NOT_FOUND', 'Image not found.'); });
 }));
 
+// The client must obtain explicit, per-image consent before it sends a photograph to an AI provider.
+app.post('/v1/ai/garment-recognition', auth, recognitionLimiter, express.raw({ type: ['image/jpeg', 'image/png', 'image/webp'], limit: maxUploadBytes }), asyncRoute(async (request, response) => {
+  if (request.header('x-drapeai-ai-consent') !== 'true') return fail(response, 422, 'AI_CONSENT_REQUIRED', 'Confirm that this photo may be sent to the AI service first.');
+  if (!Buffer.isBuffer(request.body) || request.body.length === 0) return fail(response, 415, 'UNSUPPORTED_MEDIA_TYPE', 'Choose a JPEG, PNG, or WebP image.');
+  const detected = await fileTypeFromBuffer(request.body);
+  if (!detected || !['image/jpeg', 'image/png', 'image/webp'].includes(detected.mime) || request.body.length > maxUploadBytes) return fail(response, 415, 'UNSUPPORTED_MEDIA_TYPE', 'That file is not a supported image.');
+  const recognition = await recognizeGarment(request.body, detected.mime);
+  return response.json({ data: { ...recognition, provider: 'openrouter', requiresUserReview: true } });
+}));
+
 app.post('/v1/outfit-recommendations', auth, asyncRoute(async (request, response) => {
   const input = z.object({ prompt: z.string().trim().max(240).default(''), occasion: z.string().trim().max(80).default('Everyday'), excludeGarmentIds: z.array(z.string().uuid()).max(40).default([]) }).safeParse(request.body);
   if (!input.success) return fail(response, 422, 'VALIDATION_ERROR', 'Check the outfit request and try again.');
@@ -401,6 +413,7 @@ app.delete('/v1/trips/:id', auth, asyncRoute(async (request, response) => {
 app.use((_request, response) => fail(response, 404, 'NOT_FOUND', 'This endpoint was not found.'));
 const errorHandler: ErrorRequestHandler = (error: unknown, _request: Request, response: Response, _next) => {
   if (response.headersSent) return;
+  if (error instanceof GarmentRecognitionError) return fail(response, error.status, error.code, error.message);
   if (isPgCode(error, '23505')) return fail(response, 409, 'CONFLICT', 'That information already exists.');
   if (isPgCode(error, '23503')) return fail(response, 409, 'CONFLICT', 'This item is still referenced by another record.');
   if (isPgCode(error, '23514')) return fail(response, 422, 'VALIDATION_ERROR', 'One or more values are not allowed.');

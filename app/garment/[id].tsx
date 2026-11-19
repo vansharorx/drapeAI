@@ -2,7 +2,7 @@ import { File } from 'expo-file-system';
 import { Directory, Paths } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Button, Chip, GarmentArt, Header, Label, Page, shared } from '../../src/components';
 import { useWardrobe } from '../../src/store/WardrobeProvider';
@@ -18,11 +18,28 @@ export default function GarmentDetailScreen() {
   const params = useLocalSearchParams<{ id: string }>();
   const { garments, updateGarment, removeGarment } = useWardrobe();
   const garment = useMemo(() => garments.find((item) => item.id === params.id), [garments, params.id]);
-  const [name, setName] = useState(garment?.name ?? '');
-  const [occasion, setOccasion] = useState(garment?.occasion ?? 'Everyday');
+  const [name, setName] = useState('');
+  const [category, setCategory] = useState<Category>('Tops');
+  const [color, setColor] = useState(swatches[0]);
+  const [occasion, setOccasion] = useState('Everyday');
+  const [availability, setAvailability] = useState<Availability>('Clean');
   const [photoBusy, setPhotoBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    if (!garment) return;
+    setName(garment.name); setCategory(garment.category); setColor(garment.color); setOccasion(garment.occasion); setAvailability(garment.availability);
+  }, [garment?.id]);
   if (!garment) return <Page><Header title="Piece not found" /><Text style={{ color: colors.muted }}>This garment may have been removed.</Text><Button label="Back to wardrobe" onPress={() => router.back()} /></Page>;
   const item = garment;
+
+  function saveChanges() {
+    const cleanedName = name.trim();
+    if (!cleanedName) return Alert.alert('Give it a name', 'Add a short name so you can find this piece later.');
+    setSaving(true);
+    updateGarment(item.id, { name: cleanedName, category, color, occasion, availability });
+    setSaving(false);
+    Alert.alert('Changes saved', 'Your garment details have been updated.');
+  }
 
   function confirmDelete() {
     Alert.alert('Delete this garment?', 'It will also be removed from saved looks and trip lists.', [
@@ -72,15 +89,16 @@ export default function GarmentDetailScreen() {
     <Header eyebrow="WARDROBE DETAIL" title="Edit piece" action={<Pressable onPress={() => router.back()} accessibilityRole="button" accessibilityLabel="Close" style={styles.close}><Text style={styles.closeText}>×</Text></Pressable>} />
     <View style={styles.photo}><GarmentArt garment={item} height={275} /></View>
     <View style={styles.photoActions}><Button label="Take photo" onPress={() => replacePhoto(true)} compact secondary disabled={photoBusy} /><Button label={item.imageUri ? 'Change photo' : 'Choose photo'} onPress={() => replacePhoto(false)} compact disabled={photoBusy} />{item.imageUri ? <Pressable accessibilityRole="button" onPress={removePhoto} disabled={photoBusy} style={styles.removePhoto}><Text style={styles.removePhotoText}>Remove</Text></Pressable> : null}{photoBusy ? <ActivityIndicator color={colors.accent} /> : null}</View>
-    <View style={styles.fieldGroup}><Label>NAME</Label><TextInput value={name} onChangeText={setName} onEndEditing={() => updateGarment(item.id, { name: name.trim() || item.name })} placeholder="Garment name" style={shared.input} maxLength={48} /></View>
-    <View style={styles.fieldGroup}><Label>CATEGORY</Label><View style={styles.chips}>{categories.map((category) => <Chip key={category} label={category} selected={item.category === category} onPress={() => updateGarment(item.id, { category })} />)}</View></View>
-    <View style={styles.fieldGroup}><Label>MAIN COLOR</Label><View style={styles.swatches}>{swatches.map((swatch) => <Pressable key={swatch} onPress={() => updateGarment(item.id, { color: swatch })} accessibilityRole="button" accessibilityLabel={`Set color to ${swatch}`} accessibilityState={{ selected: item.color === swatch }} style={[styles.swatch, { backgroundColor: swatch }, item.color === swatch && styles.swatchSelected]} />)}</View></View>
+    <View style={styles.fieldGroup}><Label>NAME</Label><TextInput value={name} onChangeText={setName} placeholder="Garment name" style={shared.input} maxLength={48} /></View>
+    <View style={styles.fieldGroup}><Label>CATEGORY</Label><View style={styles.chips}>{categories.map((entry) => <Chip key={entry} label={entry} selected={category === entry} onPress={() => setCategory(entry)} />)}</View></View>
+    <View style={styles.fieldGroup}><Label>MAIN COLOR</Label><View style={styles.swatches}>{swatches.map((swatch) => <Pressable key={swatch} onPress={() => setColor(swatch)} accessibilityRole="button" accessibilityLabel={`Set color to ${swatch}`} accessibilityState={{ selected: color === swatch }} style={[styles.swatch, { backgroundColor: swatch }, color === swatch && styles.swatchSelected]} />)}</View></View>
     <View style={styles.fieldGroup}><Label>OCCASION TAGS</Label><View style={styles.chips}>{['Everyday', 'Work', 'Formal', 'Evening', 'Travel', 'Smart casual'].map((item) => <Chip key={item} label={item} selected={occasion.split(', ').includes(item)} onPress={() => {
       const next = occasion.split(', ').filter(Boolean);
       const updated = next.includes(item) ? next.filter((entry) => entry !== item) : [...next, item];
-      setOccasion(updated.join(', ')); updateGarment(garment.id, { occasion: updated.join(', ') });
+      setOccasion(updated.join(', '));
     }} />)}</View></View>
-    <View style={styles.fieldGroup}><Label>AVAILABILITY</Label><View style={styles.chips}>{availabilities.map((availability) => <Chip key={availability} label={availability} selected={item.availability === availability} onPress={() => updateGarment(item.id, { availability })} />)}</View><Text style={styles.helper}>Only clean, active garments are used in outfit suggestions.</Text></View>
+    <View style={styles.fieldGroup}><Label>AVAILABILITY</Label><View style={styles.chips}>{availabilities.map((entry) => <Chip key={entry} label={entry} selected={availability === entry} onPress={() => setAvailability(entry)} />)}</View><Text style={styles.helper}>Only clean, active garments are used in outfit suggestions.</Text></View>
+    <Button label="Save changes" onPress={saveChanges} disabled={saving} />
     <View style={styles.actionRow}><Button label={item.favorite ? '♥  Favorited' : '♡  Add to favorites'} onPress={() => updateGarment(item.id, { favorite: !item.favorite })} secondary /><Button label={item.archived ? 'Restore' : 'Archive'} onPress={() => updateGarment(item.id, { archived: !item.archived })} secondary /></View>
     <Pressable accessibilityRole="button" onPress={confirmDelete} style={styles.delete}><Text style={styles.deleteText}>Delete garment</Text></Pressable>
   </Page>;
